@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="ClientMock/ClientMock.csproj" />
+  <Project Path="Common/Common.csproj" />
+  <Project Path="Server/Server.csproj" />
+</Solution>

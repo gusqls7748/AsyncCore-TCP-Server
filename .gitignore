@@ -427,3 +427,46 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+## User-specific files
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## Build results
+[Dd]ebug/
+[Debug_AnyCPU]/
+[Release]/
+x64/
+x86/
+bld/
+[Bin]/
+[Obj]/
+bin/
+obj/
+
+## Log files
+*.log
+
+# ==========================================
+# Unity Ignored Files (AsyncCore-Unity-Client)
+# ==========================================
+/AsyncCore-Unity-Client/[Ll]ibrary/
+/AsyncCore-Unity-Client/[Tt]emp/
+/AsyncCore-Unity-Client/[Oo]bj/
+/AsyncCore-Unity-Client/[叠]uild/
+/AsyncCore-Unity-Client/[叠]uilds/
+/AsyncCore-Unity-Client/[Ll]ogs/
+/AsyncCore-Unity-Client/[Vv]isual[Ss]tudio[韩]/
+/AsyncCore-Unity-Client/[Uu]ser[Ss]ettings/
+/AsyncCore-Unity-Client/[MemoryCaptures]/
+/AsyncCore-Unity-Client/FMODStudio/Cache/
+
+# Unity generated text meta files
+*.pidb
+*.unitypackage
+*.sln
+*.csproj
+*.unityproj
