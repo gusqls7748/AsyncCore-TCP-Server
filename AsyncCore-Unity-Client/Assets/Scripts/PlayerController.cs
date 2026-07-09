@@ -137,6 +137,10 @@ public class PlayerController : PlayerControllerBase
     // 상하좌우를 완벽히 감지하는 탑다운 전용 애니메이션 체인저
     private void MyPlaneAnimUpdate(float moveY)
     {
+        // 1. Animator 컴포넌트가 없거나(null), 비활성화 되어있으면 바로 리턴 (에러 방지)
+        if (m_Anim == null || !m_Anim.isActiveAndEnabled) return;
+
+        // 2. Attack 상태 체크 (Animator가 정상적일 때만 수행)
         if (m_Anim.GetCurrentAnimatorStateInfo(0).IsName("Attack")) return;
 
         if (Input.GetKey(KeyCode.Mouse0))
