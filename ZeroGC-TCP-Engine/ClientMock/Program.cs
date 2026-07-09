@@ -9,7 +9,7 @@ namespace ClientMock
     class Program
     {
         private const string ServerIp = "127.0.0.1";
-        private const int Port = 7777;
+        private const int Port = 17777;
         private const int TotalBotCount = 100; // 100명 멀티 스트레스 테스트 그대로 유지
 
         static async Task Main(string[] args)
@@ -48,16 +48,35 @@ namespace ClientMock
                         LoginRequestPacket loginPacket = new LoginRequestPacket();
                         loginPacket.Header.PacketSize = (ushort)Marshal.SizeOf(typeof(LoginRequestPacket));
                         loginPacket.Header.Id = (ushort)PacketType.LoginRequest;
-                        loginPacket.Username = $"User_Chun_{botId}"; // Chun님의 고유 유저 아이디 생성
+                        loginPacket.Username = $"User_Chun_{botId}";
 
                         byte[] loginBuffer = StructureToBytes(loginPacket);
                         await stream.WriteAsync(loginBuffer, 0, loginBuffer.Length);
 
-                        // 패킷이 겹치지 않게 살짝 텀 주기
+                        // --------------------------------------------------------
+                        // ★ [핵심 추가] 서버가 주는 로그인 응답 패킷(LoginResponse) 기다려서 내 진짜 ID 받아내기
+                        // --------------------------------------------------------
+                        byte[] resHeaderBuffer = new byte[4];
+                        await stream.ReadAsync(resHeaderBuffer, 0, 4); // 헤더 읽기
+
+                        // 응답 패킷 전체 크기만큼 바디 읽기
+                        int resBodySize = Marshal.SizeOf(typeof(LoginResponsePacket));
+                        byte[] resFullBuffer = new byte[resBodySize];
+                        Buffer.BlockCopy(resHeaderBuffer, 0, resFullBuffer, 0, 4);
+                        await stream.ReadAsync(resFullBuffer, 4, resBodySize - 4);
+
+                        // 마샬링으로 진짜 ID 추출
+                        IntPtr ptr = Marshal.AllocHGlobal(resBodySize);
+                        Marshal.Copy(resFullBuffer, 0, ptr, resBodySize);
+                        LoginResponsePacket loginRes = (LoginResponsePacket)Marshal.PtrToStructure(ptr, typeof(LoginResponsePacket));
+                        Marshal.FreeHGlobal(ptr);
+
+                        int myServerPlayerId = loginRes.PlayerId; // ◀ 서버가 공인해 준 진짜 내 번호!
+
                         await Task.Delay(rand.Next(100, 300));
 
                         // --------------------------------------------------------
-                        // 시나리오 ②: 기존대로 [MOVE] 패킷을 5번 반복해서 던지기
+                        // 시나리오 ②: 공인된 진짜 ID로 [MOVE] 패킷 5번 던지기
                         // --------------------------------------------------------
                         for (int loop = 1; loop <= 5; loop++)
                         {
@@ -65,9 +84,11 @@ namespace ClientMock
                             movePacket.Header.PacketSize = (ushort)Marshal.SizeOf(typeof(MovePacket));
                             movePacket.Header.Id = (ushort)PacketType.MoveNotify;
 
-                            movePacket.PlayerId = botId;
-                            movePacket.PosX = 10.0f * loop;
-                            movePacket.PosY = 20.0f * loop;
+                            movePacket.PlayerId = myServerPlayerId; // ★ 가짜 botId 대신 진짜 ID 세팅!
+                            movePacket.PosX = -5.0f + (rand.Next(-20, 20) * 0.1f); // 리얼한 난수 좌표
+                            movePacket.PosY = -0.2f + (rand.Next(-20, 20) * 0.1f); // ★ Y축도 움직이게 난수 처리
+                            movePacket.DirX = (byte)rand.Next(1, 3);               // 1: 오른쪽, 2: 왼쪽
+                            movePacket.IsMoving = 1;                               // 달리는 중 상태 공유
 
                             byte[] moveBuffer = StructureToBytes(movePacket);
                             await stream.WriteAsync(moveBuffer, 0, moveBuffer.Length);
@@ -81,13 +102,13 @@ namespace ClientMock
                         ChatPacket chatPacket = new ChatPacket();
                         chatPacket.Header.PacketSize = (ushort)Marshal.SizeOf(typeof(ChatPacket));
                         chatPacket.Header.Id = (ushort)PacketType.ChatNotify;
-                        chatPacket.PlayerId = botId;
-                        chatPacket.Message = $"안녕하세요! {botId}번 봇입니다. 성능 끝내주네요!";
+                        chatPacket.PlayerId = myServerPlayerId; // ★ 진짜 ID 세팅!
+                        chatPacket.Message = $"안녕하세요! {botId}번 봇입니다. 평면 이동 끝내주네요!";
 
                         byte[] chatBuffer = StructureToBytes(chatPacket);
                         await stream.WriteAsync(chatBuffer, 0, chatBuffer.Length);
 
-                        await Task.Delay(rand.Next(200, 500));
+                        await Task.Delay(rand.Next(1000, 2000)); // 연동 확인을 위해 조금 더 살아있다가 나가기
                     }
                 }
             }
