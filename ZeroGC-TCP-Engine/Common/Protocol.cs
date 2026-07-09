@@ -12,6 +12,14 @@ namespace Common
         ChatNotify = 4     // 채팅 메시지 (양방향)
     }
 
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct LoginResponsePacket
+    {
+        public PacketHeader Header;
+        public int PlayerId; // 서버가 발급해 준 나만의 주민등록번호!
+        public bool Success;
+    }
+
     // 1. 모든 택배 상자의 겉면에 붙는 [공통 운송장] (4바이트)
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct PacketHeader
@@ -27,7 +35,9 @@ namespace Common
         public PacketHeader Header;
         public int PlayerId;
         public float PosX;
-        public float PosY;
+        public float PosY;     // ★ 서버에서도 이 Y값이 제대로 파싱되고 있는지 확인!
+        public byte DirX;     // 추가됨
+        public byte IsMoving; // 추가됨
     }
 
     // 3. [신규] 로그인 요청 패킷 규격

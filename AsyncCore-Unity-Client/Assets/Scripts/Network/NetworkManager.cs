@@ -1,38 +1,36 @@
 using System;
-using System.Net.Sockets;
-using System.Threading.Tasks;
-using System.Runtime.InteropServices;
-using UnityEngine;
 using System.Collections.Generic;
-
-
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using UnityEngine;
 
 public class NetworkManager : MonoBehaviour
 {
-    // 1. 클래스 상단에 참조를 추가하세요 (사각형 오브젝트를 제어하기 위함)
-    public Transform playerTransform; // 유니티 인스펙터에서 사각형 오브젝트를 끌어다 놓으세요!
-
-    // NetworkManager.cs에 추가할 내용
-    public GameObject playerPrefab; // 유니티에서 캐릭터 프리팹을 할당하세요!
-
-    // 내 화면에 생성된 다른 플레이어들을 관리
-    private Dictionary<int, GameObject> _players = new Dictionary<int, GameObject>();
-
     public static NetworkManager Instance { get; private set; }
 
-    private TcpClient _tcpClient;
+    [Header("Player Settings")]
+    public Transform playerTransform;
+    public GameObject playerPrefab;
+
+    private Dictionary<int, GameObject> _players = new Dictionary<int, GameObject>();
+
+    private TcpClient _client;
     private NetworkStream _stream;
     private bool _isConnected = false;
 
-    // Chun님의 기존 링 버퍼와 호환되도록 내부 버퍼와 인덱스 바늘을 직접 제어합니다.
     private byte[] _ringBufferArray;
     private int _writePos = 0;
     private int _readPos = 0;
     private const int BUFFER_SIZE = 4096;
 
-    // 유니티 메인 스레드 안전 구역으로 패킷을 토스할 수신 주머니(Queue)
+    private int _myPlayerId = -1;
+
     private Queue<KeyValuePair<ushort, byte[]>> _packetQueue = new Queue<KeyValuePair<ushort, byte[]>>();
     private readonly object _queueLock = new object();
+
+    // ★ 여기 있던 중복 PacketType / LoginRequestPacket / LoginResponsePacket 정의를
+    //   모두 삭제했습니다. 이제 전역 Packet.cs의 정의(서버와 동일 SizeConst=16)를 사용합니다.
 
     private void Awake()
     {
@@ -50,13 +48,11 @@ public class NetworkManager : MonoBehaviour
 
     private void Start()
     {
-        ConnectToServer("127.0.0.1", 7777);
+        ConnectToServer("127.0.0.1", 17777);
     }
 
     private void Update()
     {
-        // ★ [유니티 핵심 관문 통과]
-        // 매 프레임마다 메인 스레드(Update) 안에서 주머니에 쌓인 패킷을 안전하게 꺼내어 로직을 터트립니다!
         lock (_queueLock)
         {
             while (_packetQueue.Count > 0)
@@ -67,23 +63,23 @@ public class NetworkManager : MonoBehaviour
         }
     }
 
-    private async void ConnectToServer(string ip, int port)
+    public async Task ConnectToServer(string ip, int port)
     {
         try
         {
-            _tcpClient = new TcpClient();
-            await _tcpClient.ConnectAsync(ip, port);
-
-            _stream = _tcpClient.GetStream();
+            _client = new TcpClient();
+            await _client.ConnectAsync(ip, port);
+            _stream = _client.GetStream();
             _isConnected = true;
-
             Debug.Log($"[네트워크] 서버({ip}:{port})에 성공적으로 연결되었습니다!");
 
-            _ = ReceiveLoopAsync();
+            _ = Task.Run(() => ReceiveLoopAsync());
+
+            SendLoginRequest("User_Chun");
         }
         catch (Exception ex)
         {
-            Debug.LogError($"[네트워크 연결 실패] 서버가 켜져 있는지 확인하세요: {ex.Message}");
+            Debug.LogError($"[네트워크 연결 실패] {ex.Message}");
         }
     }
 
@@ -95,11 +91,9 @@ public class NetworkManager : MonoBehaviour
         {
             while (_isConnected)
             {
-                // 남은 빈 공간(FreeSize) 계산
                 int freeSize = BUFFER_SIZE - _writePos;
                 if (freeSize <= 0)
                 {
-                    // 버퍼가 꽉 찼으면 앞으로 당겨서 청소(CleanUp)
                     CleanUpBuffer();
                     freeSize = BUFFER_SIZE - _writePos;
                 }
@@ -107,17 +101,14 @@ public class NetworkManager : MonoBehaviour
                 int bytesRead = await _stream.ReadAsync(recvBuffer, 0, Math.Min(recvBuffer.Length, freeSize));
                 if (bytesRead == 0) break;
 
-                // 완충지대에 임시 통장 기록 복사
                 Buffer.BlockCopy(recvBuffer, 0, _ringBufferArray, _writePos, bytesRead);
-                _writePos += bytesRead; // 쓰기 바늘 전진
+                _writePos += bytesRead;
 
                 while (true)
                 {
-                    // 쌓여있는 데이터 크기(DataSize) 계산
                     int dataSize = _writePos - _readPos;
-                    if (dataSize < 4) break; // 최소 헤더 크기 부족
+                    if (dataSize < 4) break;
 
-                    // 임시 헤더 4바이트 컷팅 및 로우레벨 마샬링 복원
                     byte[] tempHeader = new byte[4];
                     Buffer.BlockCopy(_ringBufferArray, _readPos, tempHeader, 0, 4);
 
@@ -125,16 +116,13 @@ public class NetworkManager : MonoBehaviour
                     PacketHeader header = (PacketHeader)Marshal.PtrToStructure(handle.AddrOfPinnedObject(), typeof(PacketHeader));
                     handle.Free();
 
-                    // 몸통 데이터가 아직 덜 수신되었다면 break하고 다음 수신 유도
                     if (dataSize < header.PacketSize) break;
 
-                    // [완전한 패킷 추출 성립]
                     byte[] fullPacketBuffer = new byte[header.PacketSize];
                     Buffer.BlockCopy(_ringBufferArray, _readPos, fullPacketBuffer, 0, header.PacketSize);
 
-                    _readPos += header.PacketSize; // 읽기 바늘 전진
+                    _readPos += header.PacketSize;
 
-                    // 멀티스레드 락을 걸고 주머니에 안전하게 보관
                     lock (_queueLock)
                     {
                         _packetQueue.Enqueue(new KeyValuePair<ushort, byte[]>(header.Id, fullPacketBuffer));
@@ -153,7 +141,6 @@ public class NetworkManager : MonoBehaviour
         int dataSize = _writePos - _readPos;
         if (dataSize > 0)
         {
-            // 남은 파편 데이터를 맨 앞으로 당겨 정렬
             Buffer.BlockCopy(_ringBufferArray, _readPos, _ringBufferArray, 0, dataSize);
             _readPos = 0;
             _writePos = dataSize;
@@ -167,51 +154,94 @@ public class NetworkManager : MonoBehaviour
 
     private void HandlePacket(ushort packetId, byte[] rawData)
     {
-        // 패킷 ID가 MoveNotify(3번)인 경우
+        // ==========================================
+        // 1. 로그인 응답 패킷 처리 분기
+        // ==========================================
+        if (packetId == (ushort)PacketType.LoginResponse)
+        {
+            GCHandle handle = GCHandle.Alloc(rawData, GCHandleType.Pinned);
+            LoginResponsePacket loginRes = (LoginResponsePacket)Marshal.PtrToStructure(handle.AddrOfPinnedObject(), typeof(LoginResponsePacket));
+            handle.Free();
+
+            // [체크] 서버와 bool 타입으로 통일하셨다면 그대로 사용, byte(0,1)라면 (loginRes.Success == 1)로 변경하세요.
+            if (loginRes.Success)
+            {
+                _myPlayerId = loginRes.PlayerId;
+                Debug.Log($"[네트워크 로그인 성공] 서버로부터 발급받은 내 고유 ID: {_myPlayerId}");
+            }
+            else
+            {
+                Debug.LogError("[네트워크 로그인 실패] 서버가 진입을 거부했습니다.");
+            }
+            return; // 로그인 처리가 끝났으므로 함수 탈출
+        }
+
+        // ==========================================
+        // 2. 이동 알림(브로드캐스트) 패킷 처리 분기
+        // ==========================================
         if (packetId == (ushort)PacketType.MoveNotify)
         {
-            // 1. 바이트 배열을 MovePacket 구조체로 변환
             GCHandle handle = GCHandle.Alloc(rawData, GCHandleType.Pinned);
             MovePacket movePacket = (MovePacket)Marshal.PtrToStructure(handle.AddrOfPinnedObject(), typeof(MovePacket));
             handle.Free();
 
-            // [핵심] 해당 PlayerId를 가진 오브젝트가 있는지 확인
+            // 내 화면에 없는 새로운 유저라면 월드에 캐릭터 프리팹 생성(Spawn)
             if (!_players.ContainsKey(movePacket.PlayerId))
             {
-                // 없으면 생성 (Spawn)
                 GameObject newPlayer = Instantiate(playerPrefab);
                 _players.Add(movePacket.PlayerId, newPlayer);
-                Debug.Log($"[생성] 새로운 유저 {movePacket.PlayerId} 생성 완료!");
+                Debug.Log($"[생성] 새로운 가상 유저 {movePacket.PlayerId}번이 월드에 생성되었습니다.");
             }
 
-            // 딕셔너리에서 찾아 위치 업데이트
-            _players[movePacket.PlayerId].transform.position = new Vector3(movePacket.PosX, movePacket.PosY, 0);
+            // 동기화할 타겟 캐릭터 오브젝트 추출
+            GameObject targetPlayer = _players[movePacket.PlayerId];
+
+            // [기능 1] 실시간 위치 동기화
+            //targetPlayer.transform.position = new Vector3(movePacket.PosX, movePacket.PosY, 0);
+            // 패킷을 보낸 유저의 ID가 '나(_myPlayerId)'라면 내 화면의 물리 부드러움을 위해 위치 강제 대입을 패스합니다!
+            if (movePacket.PlayerId != _myPlayerId)
+            {
+                // [기능 1] 다른 유저나 봇의 실시간 위치만 동기화
+                targetPlayer.transform.position = new Vector3(movePacket.PosX, movePacket.PosY, 0);
+            }
+
+            // [기능 2] 애니메이션 상태 동기화 (Idle <-> Run)
+            Animator anim = targetPlayer.GetComponent<Animator>();
+            if (anim != null)
+            {
+                // movePacket에 심어온 IsMoving이 1이면 달리기 애니메이션 On, 0이면 Off
+                anim.SetBool("isMoving", movePacket.IsMoving == 1); // ◀ 여기 파라미터 이름!
+            }
+
+            // [기능 3] 바라보는 방향 동기화 (좌우 Flip)
+            if (movePacket.DirX == 1)      // 오른쪽 바라봄
+            {
+                targetPlayer.transform.localScale = new Vector3(1, 1, 1);
+            }
+            else if (movePacket.DirX == 2) // 왼쪽 바라봄
+            {
+                targetPlayer.transform.localScale = new Vector3(-1, 1, 1); // X축 반전
+            }
         }
     }
 
-    private void OnApplicationQuit()
+    public void SendMovePacket(float x, float y, byte dirX, byte isMoving)
     {
-        _isConnected = false;
-        _stream?.Close();
-        _tcpClient?.Close();
-    }
-
-    // [NetworkManager 내부 추가] 서버로 이동 패킷을 쏘는 핵심 함수
-    public void SendMovePacket(float x, float y)
-    {
-        if (!_isConnected || _stream == null) return;
+        if (!_isConnected || _stream == null || _myPlayerId == -1) return;
 
         try
         {
-            // 1. 패킷 조립
             MovePacket packet = new MovePacket();
             packet.Header.PacketSize = (ushort)Marshal.SizeOf(typeof(MovePacket));
-            packet.Header.Id = (ushort)PacketType.MoveNotify; // 3번 사용!
-            packet.PlayerId = 1; // [테스트용] 나중에 로그인 성공 후 받은 실제 ID로 변경 예정
+            packet.Header.Id = (ushort)PacketType.MoveNotify;
+            packet.PlayerId = _myPlayerId;
             packet.PosX = x;
             packet.PosY = y;
 
-            // 2. 마샬링 및 전송 로직 (기존과 동일)
+            // ★ [여기가 핵심] 구조체에 새로 정의한 변수들을 매개변수로 받아온 값으로 채워줍니다.
+            packet.DirX = dirX;
+            packet.IsMoving = isMoving;
+
             int size = Marshal.SizeOf(packet);
             byte[] sendBuffer = new byte[size];
             IntPtr ptr = Marshal.AllocHGlobal(size);
@@ -233,24 +263,20 @@ public class NetworkManager : MonoBehaviour
 
         try
         {
-            // 1. 패킷 조립
             LoginRequestPacket packet = new LoginRequestPacket();
             packet.Header.PacketSize = (ushort)Marshal.SizeOf(typeof(LoginRequestPacket));
             packet.Header.Id = (ushort)PacketType.LoginRequest;
             packet.Username = username;
 
-            // 2. 마샬링 (구조체 -> 바이트 배열)
             int size = Marshal.SizeOf(packet);
             byte[] sendBuffer = new byte[size];
             IntPtr ptr = Marshal.AllocHGlobal(size);
-
             Marshal.StructureToPtr(packet, ptr, false);
             Marshal.Copy(ptr, sendBuffer, 0, size);
             Marshal.FreeHGlobal(ptr);
 
-            // 3. 전송
             _stream.Write(sendBuffer, 0, sendBuffer.Length);
-            Debug.Log($"[로그인] {username} 이름으로 서버에 접속 요청을 보냈습니다.");
+            Debug.Log($"[네트워크] 서버에 로그인 요청을 보냈습니다. (Username: {username})");
         }
         catch (Exception ex)
         {
@@ -258,17 +284,10 @@ public class NetworkManager : MonoBehaviour
         }
     }
 
-    // 서버로부터 이동 패킷을 받았을 때
-    private void OnMoveReceived(int playerId, float x, float y)
+    private void OnApplicationQuit()
     {
-        if (_players.ContainsKey(playerId))
-        {
-            // 이미 생성된 플레이어라면 위치만 갱신
-            _players[playerId].transform.position = new Vector3(x, y, 0);
-        }
-        else
-        {
-            // 만약 없는 ID라면? 여기서 캐릭터를 생성(Spawn)해야 합니다!
-        }
+        _isConnected = false;
+        _stream?.Close();
+        _client?.Close();
     }
 }
