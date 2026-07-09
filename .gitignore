@@ -472,8 +472,7 @@ obj/
 *.unityproj
 
 # 에셋 폴더 무시
-Assets/Low_Swordman/
+/AsyncCore-Unity-Client/Assets/Low_Swordman/
+/AsyncCore-Unity-Client/Assets/Scences
+/AsyncCore-Unity-Client/Assets/Prefab
 
-# Git의 인덱스(추적 목록)에서 에셋 폴더들을 제거합니다 (파일은 삭제되지 않음)
-git rm -r --cached AsyncCore-Unity-Client/Assets/Low_Swordman/
-git rm -r --cached AsyncCore-Unity-Client/Assets/Prefab/
